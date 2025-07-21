@@ -1,101 +1,85 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
-import seaborn as sns
 import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, r2_score
 
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.preprocessing import LabelEncoder
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score, roc_curve
+# Title
+st.title("Salary Prediction App")
+st.write("Upload a dataset to train the model and predict salaries based on years of experience.")
 
-# Set page config
-st.set_page_config(page_title="Income Prediction", layout="wide")
+# Upload CSV
+uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
 
-st.title("📊 Predict Income Category (<=50K or >50K)")
+if uploaded_file is not None:
+    try:
+        data = pd.read_csv(uploaded_file)
+        st.success("Dataset loaded successfully!")
 
-# Upload dataset
-uploaded_file = st.file_uploader("Upload your dataset (CSV)", type=["csv"])
-if uploaded_file:
-    df = pd.read_csv(uploaded_file)
+        # Check required columns
+        if 'YearsExperience' in data.columns and 'Salary' in data.columns:
+            st.write("### Dataset Preview:")
+            st.dataframe(data.head())
 
-    # Strip column names and string values
-    df.columns = df.columns.str.strip()
-    df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+            # Scatter plot
+            fig1, ax1 = plt.subplots()
+            sns.scatterplot(x='YearsExperience', y='Salary', data=data, ax=ax1)
+            ax1.set_title("Years of Experience vs Salary")
+            st.pyplot(fig1)
 
-    # Drop rows with missing values (optional)
-    df.dropna(inplace=True)
+            # Split data
+            X = data[['YearsExperience']]
+            y = data['Salary']
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    # Encode target column 'income'
-    if 'income' in df.columns:
-        le = LabelEncoder()
-        df['income'] = le.fit_transform(df['income'])
-    else:
-        st.error("Dataset must contain the 'income' column")
-        st.stop()
+            # Train model
+            model = LinearRegression()
+            model.fit(X_train, y_train)
 
-    # One-hot encode categorical columns
-    categorical_cols = df.select_dtypes(include='object').columns.tolist()
-    df = pd.get_dummies(df, columns=categorical_cols, drop_first=True)
+            # Accuracy metrics
+            y_pred = model.predict(X_test)
+            mse = mean_squared_error(y_test, y_pred)
+            r2 = r2_score(y_test, y_pred)
 
-    # Split features and target
-    X = df.drop('income', axis=1)
-    y = df['income']
+            st.subheader("📊 Model Performance")
+            st.write(f"**Mean Squared Error (MSE):** {mse:.2f}")
+            st.write(f"**R² Score:** {r2:.2f}")
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
+            # Actual vs predicted plot
+            fig2, ax2 = plt.subplots()
+            ax2.scatter(y_test, y_pred, color='green')
+            ax2.set_xlabel("Actual Salary")
+            ax2.set_ylabel("Predicted Salary")
+            ax2.set_title("Actual vs Predicted Salary")
+            st.pyplot(fig2)
 
-    # Train Decision Tree with GridSearch
-    model = DecisionTreeClassifier(random_state=42)
-    params = {
-        'max_depth': [5, 10, 15, 20],
-        'min_samples_split': [2, 5, 10],
-        'criterion': ['gini', 'entropy']
-    }
-    grid = GridSearchCV(model, params, cv=5, scoring='accuracy')
-    grid.fit(X_train, y_train)
-    best_model = grid.best_estimator_
+            # Regression line on test set
+            fig3, ax3 = plt.subplots()
+            sns.scatterplot(x=X_test['YearsExperience'], y=y_test, label='Actual', ax=ax3)
+            sns.lineplot(x=X_test['YearsExperience'], y=y_pred, color='red', label='Predicted', ax=ax3)
+            ax3.set_title("Regression Line vs Actual (Test Set)")
+            st.pyplot(fig3)
 
-    # Predict and evaluate
-    y_pred = best_model.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
-    st.success(f"✅ Model Accuracy: {acc*100:.2f}%")
+            # Prediction Input
+            st.write("### Predict Salary")
+            experience = st.number_input("Enter Years of Experience", min_value=0.0, step=0.1)
 
-    # Show classification report
-    st.subheader("Classification Report")
-    st.text(classification_report(y_test, y_pred))
+            if st.button("Predict"):
+                prediction = model.predict(np.array([[experience]]))
+                st.success(f"Predicted Salary: ₹ {prediction[0]:,.2f}")
 
-    # Confusion Matrix
-    st.subheader("Confusion Matrix")
-    cm = confusion_matrix(y_test, y_pred)
-    fig_cm = plt.figure()
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-    st.pyplot(fig_cm)
+        else:
+            st.error("CSV must contain 'YearsExperience' and 'Salary' columns.")
 
-    # ROC Curve
-    st.subheader("ROC Curve")
-    y_prob = best_model.predict_proba(X_test)[:, 1]
-    fpr, tpr, _ = roc_curve(y_test, y_prob)
-    roc_auc = roc_auc_score(y_test, y_prob)
-
-    fig_roc = plt.figure()
-    plt.plot(fpr, tpr, label=f'AUC = {roc_auc:.2f}')
-    plt.plot([0, 1], [0, 1], linestyle='--')
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('ROC Curve')
-    plt.legend()
-    st.pyplot(fig_roc)
-
-    # Feature Importance
-    st.subheader("Top 15 Important Features")
-    importances = pd.Series(best_model.feature_importances_, index=X.columns)
-    top_features = importances.sort_values(ascending=False).head(15)
-
-    fig_feat = plt.figure(figsize=(10, 6))
-    sns.barplot(x=top_features, y=top_features.index)
-    plt.title('Feature Importances')
-    st.pyplot(fig_feat)
-
+    except Exception as e:
+        st.error(f"Error reading file: {e}")
 else:
-    st.info("📂 Please upload a valid dataset CSV with an 'income' column to proceed.")
+    st.info("Please upload a dataset CSV file.")
+
+  
+   
+  
+   
