@@ -1,85 +1,106 @@
+# app.py
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error, r2_score
 
-# Title
-st.title("Salary Prediction App")
-st.write("Upload a dataset to train the model and predict salaries based on years of experience.")
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import LabelEncoder
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score, roc_curve
 
-# Upload CSV
-uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
+st.set_page_config(page_title="Income Class Predictor", layout="wide")
+st.title("💼 Income Classification App (<=50K or >50K)")
 
-if uploaded_file is not None:
-    try:
-        data = pd.read_csv(uploaded_file)
-        st.success("Dataset loaded successfully!")
+# Load dataset
+@st.cache_data
+def load_data():
+    df = pd.read_csv("dataset.csv")
+    df.columns = df.columns.str.strip()
+    df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+    return df
 
-        # Check required columns
-        if 'YearsExperience' in data.columns and 'Salary' in data.columns:
-            st.write("### Dataset Preview:")
-            st.dataframe(data.head())
+df = load_data()
 
-            # Scatter plot
-            fig1, ax1 = plt.subplots()
-            sns.scatterplot(x='YearsExperience', y='Salary', data=data, ax=ax1)
-            ax1.set_title("Years of Experience vs Salary")
-            st.pyplot(fig1)
+# Encode target
+le = LabelEncoder()
+df['income'] = le.fit_transform(df['income'])  # >50K = 1, <=50K = 0
 
-            # Split data
-            X = data[['YearsExperience']]
-            y = data['Salary']
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+# One-hot encode categorical columns
+categorical_cols = df.select_dtypes(include='object').columns
+df_encoded = pd.get_dummies(df, columns=categorical_cols, drop_first=True)
 
-            # Train model
-            model = LinearRegression()
-            model.fit(X_train, y_train)
+# Split
+X = df_encoded.drop('income', axis=1)
+y = df_encoded['income']
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
 
-            # Accuracy metrics
-            y_pred = model.predict(X_test)
-            mse = mean_squared_error(y_test, y_pred)
-            r2 = r2_score(y_test, y_pred)
+# Train model
+dtree = DecisionTreeClassifier(random_state=42)
+params = {
+    'max_depth': [5, 10, 15],
+    'min_samples_split': [2, 5, 10],
+    'criterion': ['gini', 'entropy']
+}
+grid = GridSearchCV(dtree, params, cv=5, scoring='accuracy')
+grid.fit(X_train, y_train)
+best_model = grid.best_estimator_
 
-            st.subheader("📊 Model Performance")
-            st.write(f"**Mean Squared Error (MSE):** {mse:.2f}")
-            st.write(f"**R² Score:** {r2:.2f}")
-
-            # Actual vs predicted plot
-            fig2, ax2 = plt.subplots()
-            ax2.scatter(y_test, y_pred, color='green')
-            ax2.set_xlabel("Actual Salary")
-            ax2.set_ylabel("Predicted Salary")
-            ax2.set_title("Actual vs Predicted Salary")
-            st.pyplot(fig2)
-
-            # Regression line on test set
-            fig3, ax3 = plt.subplots()
-            sns.scatterplot(x=X_test['YearsExperience'], y=y_test, label='Actual', ax=ax3)
-            sns.lineplot(x=X_test['YearsExperience'], y=y_pred, color='red', label='Predicted', ax=ax3)
-            ax3.set_title("Regression Line vs Actual (Test Set)")
-            st.pyplot(fig3)
-
-            # Prediction Input
-            st.write("### Predict Salary")
-            experience = st.number_input("Enter Years of Experience", min_value=0.0, step=0.1)
-
-            if st.button("Predict"):
-                prediction = model.predict(np.array([[experience]]))
-                st.success(f"Predicted Salary: ₹ {prediction[0]:,.2f}")
-
+# User input
+st.header("🧍 Enter User Data")
+user_data = {}
+for col in df.columns:
+    if col != 'income':
+        if df[col].dtype == object:
+            user_data[col] = st.selectbox(col, df[col].unique())
         else:
-            st.error("CSV must contain 'YearsExperience' and 'Salary' columns.")
+            user_data[col] = st.number_input(col, float(df[col].min()), float(df[col].max()))
 
-    except Exception as e:
-        st.error(f"Error reading file: {e}")
-else:
-    st.info("Please upload a dataset CSV file.")
+user_df = pd.DataFrame([user_data])
+user_encoded = pd.get_dummies(user_df)
+missing_cols = set(X.columns) - set(user_encoded.columns)
+for col in missing_cols:
+    user_encoded[col] = 0
+user_encoded = user_encoded[X.columns]  # reorder columns
 
-  
-   
-  
-   
+# Predict
+if st.button("🔮 Predict Income Class"):
+    pred = best_model.predict(user_encoded)[0]
+    label = ">50K" if pred == 1 else "<=50K"
+    st.subheader(f"🎯 Predicted Income: **{label}**")
+
+    # Accuracy
+    y_pred = best_model.predict(X_test)
+    acc = accuracy_score(y_test, y_pred)
+    st.write(f"✅ Model Accuracy: **{acc*100:.2f}%**")
+
+    # Confusion Matrix
+    cm = confusion_matrix(y_test, y_pred)
+    st.subheader("📊 Confusion Matrix")
+    fig, ax = plt.subplots()
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax)
+    st.pyplot(fig)
+
+    # ROC Curve
+    y_prob = best_model.predict_proba(X_test)[:, 1]
+    fpr, tpr, _ = roc_curve(y_test, y_prob)
+    roc_auc = roc_auc_score(y_test, y_prob)
+    st.subheader("🚦 ROC Curve")
+    fig2, ax2 = plt.subplots()
+    ax2.plot(fpr, tpr, label=f"ROC AUC = {roc_auc:.2f}")
+    ax2.plot([0, 1], [0, 1], 'k--')
+    ax2.set_xlabel("False Positive Rate")
+    ax2.set_ylabel("True Positive Rate")
+    ax2.legend()
+    st.pyplot(fig2)
+
+    # Feature Importance
+    importances = pd.Series(best_model.feature_importances_, index=X.columns)
+    top_features = importances.sort_values(ascending=False).head(15)
+    st.subheader("📌 Top Feature Importances")
+    fig3, ax3 = plt.subplots(figsize=(10,6))
+    sns.barplot(x=top_features.values, y=top_features.index, ax=ax3)
+    st.pyplot(fig3)
+
