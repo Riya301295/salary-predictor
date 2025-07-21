@@ -1,106 +1,127 @@
-# app.py
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
-
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score, roc_curve
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_curve, auc
 
-st.set_page_config(page_title="Income Class Predictor", layout="wide")
-st.title("💼 Income Classification App (<=50K or >50K)")
+# Title
+st.title("💼 Salary Classification Predictor")
+st.write("This app predicts if a person earns more than ₹50K/year based on their details.")
+st.markdown("---")
 
 # Load dataset
 @st.cache_data
 def load_data():
     df = pd.read_csv("dataset.csv")
-    df.columns = df.columns.str.strip()
-    df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
     return df
 
 df = load_data()
 
-# Encode target
-le = LabelEncoder()
-df['income'] = le.fit_transform(df['income'])  # >50K = 1, <=50K = 0
+# Show dataset preview
+if st.checkbox("Show Raw Dataset"):
+    st.dataframe(df)
 
-# One-hot encode categorical columns
-categorical_cols = df.select_dtypes(include='object').columns
-df_encoded = pd.get_dummies(df, columns=categorical_cols, drop_first=True)
+# Encode categorical features
+def preprocess_data(df):
+    df = df.copy()
+    le_dict = {}
+    for col in df.select_dtypes(include='object'):
+        le = LabelEncoder()
+        df[col] = le.fit_transform(df[col])
+        le_dict[col] = le
+    return df, le_dict
 
-# Split
-X = df_encoded.drop('income', axis=1)
-y = df_encoded['income']
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
+df_encoded, label_encoders = preprocess_data(df)
+
+# Split data
+X = df_encoded.drop("Salary", axis=1)
+y = df_encoded["Salary"]
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
 # Train model
-dtree = DecisionTreeClassifier(random_state=42)
-params = {
-    'max_depth': [5, 10, 15],
-    'min_samples_split': [2, 5, 10],
-    'criterion': ['gini', 'entropy']
-}
-grid = GridSearchCV(dtree, params, cv=5, scoring='accuracy')
-grid.fit(X_train, y_train)
-best_model = grid.best_estimator_
+model = DecisionTreeClassifier()
+model.fit(X_train, y_train)
+y_pred = model.predict(X_test)
 
-# User input
-st.header("🧍 Enter User Data")
-user_data = {}
-for col in df.columns:
-    if col != 'income':
-        if df[col].dtype == object:
-            user_data[col] = st.selectbox(col, df[col].unique())
-        else:
-            user_data[col] = st.number_input(col, float(df[col].min()), float(df[col].max()))
+# Show metrics
+accuracy = accuracy_score(y_test, y_pred)
+st.subheader("🔍 Model Accuracy")
+st.write(f"**Accuracy:** {accuracy * 100:.2f}%")
 
-user_df = pd.DataFrame([user_data])
-user_encoded = pd.get_dummies(user_df)
-missing_cols = set(X.columns) - set(user_encoded.columns)
-for col in missing_cols:
-    user_encoded[col] = 0
-user_encoded = user_encoded[X.columns]  # reorder columns
+# Confusion Matrix
+st.subheader("📊 Confusion Matrix")
+fig, ax = plt.subplots()
+cm = confusion_matrix(y_test, y_pred)
+ax.matshow(cm, cmap='Blues')
+for i in range(2):
+    for j in range(2):
+        ax.text(j, i, cm[i, j], va='center', ha='center')
+plt.xlabel('Predicted')
+plt.ylabel('Actual')
+st.pyplot(fig)
 
-# Predict
-if st.button("🔮 Predict Income Class"):
-    pred = best_model.predict(user_encoded)[0]
-    label = ">50K" if pred == 1 else "<=50K"
-    st.subheader(f"🎯 Predicted Income: **{label}**")
+# Classification Report
+st.subheader("📃 Classification Report")
+report = classification_report(y_test, y_pred, output_dict=True)
+st.dataframe(pd.DataFrame(report).transpose())
 
-    # Accuracy
-    y_pred = best_model.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
-    st.write(f"✅ Model Accuracy: **{acc*100:.2f}%**")
+# ROC Curve
+st.subheader("📈 ROC Curve")
+fpr, tpr, thresholds = roc_curve(y_test, model.predict_proba(X_test)[:, 1])
+roc_auc = auc(fpr, tpr)
+plt.figure()
+plt.plot(fpr, tpr, label=f'ROC curve (area = {roc_auc:.2f})')
+plt.plot([0, 1], [0, 1], linestyle='--')
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('ROC Curve')
+plt.legend()
+st.pyplot(plt)
 
-    # Confusion Matrix
-    cm = confusion_matrix(y_test, y_pred)
-    st.subheader("📊 Confusion Matrix")
-    fig, ax = plt.subplots()
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax)
-    st.pyplot(fig)
+# User Input Section
+st.markdown("---")
+st.subheader("🧑‍💻 Predict a New Person's Salary")
 
-    # ROC Curve
-    y_prob = best_model.predict_proba(X_test)[:, 1]
-    fpr, tpr, _ = roc_curve(y_test, y_prob)
-    roc_auc = roc_auc_score(y_test, y_prob)
-    st.subheader("🚦 ROC Curve")
-    fig2, ax2 = plt.subplots()
-    ax2.plot(fpr, tpr, label=f"ROC AUC = {roc_auc:.2f}")
-    ax2.plot([0, 1], [0, 1], 'k--')
-    ax2.set_xlabel("False Positive Rate")
-    ax2.set_ylabel("True Positive Rate")
-    ax2.legend()
-    st.pyplot(fig2)
+# Example-based input
+exp = st.text_input("Years of Experience (e.g., 5.0)", placeholder="5.0")
+education = st.text_input("Education Level (e.g., Bachelors)", placeholder="Bachelors")
+job = st.text_input("Job Title (e.g., Engineer)", placeholder="Engineer")
+gender = st.text_input("Gender (e.g., Male/Female)", placeholder="Female")
+age = st.text_input("Age (e.g., 28)", placeholder="28")
 
-    # Feature Importance
-    importances = pd.Series(best_model.feature_importances_, index=X.columns)
-    top_features = importances.sort_values(ascending=False).head(15)
-    st.subheader("📌 Top Feature Importances")
-    fig3, ax3 = plt.subplots(figsize=(10,6))
-    sns.barplot(x=top_features.values, y=top_features.index, ax=ax3)
-    st.pyplot(fig3)
+# Validate input
+if st.button("🔮 Predict Salary"):
+    try:
+        new_data = pd.DataFrame({
+            "YearsExperience": [float(exp)],
+            "Education": [education],
+            "JobTitle": [job],
+            "Gender": [gender],
+            "Age": [int(age)]
+        })
+
+        # Encode using trained label encoders
+        for col in ["Education", "JobTitle", "Gender"]:
+            le = label_encoders.get(col)
+            if le:
+                if new_data[col][0] in le.classes_:
+                    new_data[col] = le.transform(new_data[col])
+                else:
+                    st.warning(f"'{new_data[col][0]}' not seen in training data. Try a different value.")
+                    st.stop()
+
+        # Predict
+        prediction = model.predict(new_data)[0]
+        pred_proba = model.predict_proba(new_data)[0][prediction]
+
+        st.success(f"Prediction: **{'Salary > ₹50K' if prediction == 1 else 'Salary ≤ ₹50K'}**")
+        st.write(f"Prediction Confidence: **{pred_proba * 100:.2f}%**")
+
+    except Exception as e:
+        st.error(f"Error: {e}")
+
 
